@@ -1,0 +1,13 @@
+# Ambiente virtual criado pelo uv
+.venv/
+
+# Segredos (chave da API)
+.env
+
+# Banco de dados (581 MB, acima do limite do GitHub)
+data/*.db
+
+# Arquivos gerados pelo Python e pelo Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
