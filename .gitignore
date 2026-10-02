@@ -4,8 +4,9 @@
 # Segredos (chave da API)
 .env
 
-# Banco de dados (581 MB, acima do limite do GitHub)
-data/*.db
+# Banco de dados acima do limite do GitHub e arquivos temporários do SQLite
+data/*
+!data/.gitkeep
 
 # Arquivos gerados pelo Python e pelo Jupyter
 __pycache__/
