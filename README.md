@@ -73,6 +73,26 @@ await perguntar("Quais os 10 filmes de animação com maior receita?")
 await perguntar("E em dólar?", continuar=True)   # continua a conversa anterior
 ```
 
+### Solução de problemas
+
+**"Uma política de Controle de Aplicativo bloqueou este arquivo" (Windows 11)**
+
+O Smart App Control do Windows pode bloquear o `python.exe` da `.venv` (um lançador pequeno que o uv cria). O Python que o uv baixou continua liberado, então dá para registrar um kernel que usa esse Python com os pacotes da `.venv`. Na pasta do projeto, no PowerShell:
+
+```powershell
+$base = "$env:APPDATA\uv\python\cpython-3.12-windows-x86_64-none\python.exe"
+$pacotes = "$PWD\.venv\Lib\site-packages"
+$env:PYTHONPATH = $pacotes
+& $base -m ipykernel install --user --name cinedata-agent --display-name "CineData (Python 3.12)" --env PYTHONPATH $pacotes
+Remove-Item Env:PYTHONPATH
+```
+
+Depois, recarregue o VSCode (*Developer: Reload Window*) e escolha o kernel **CineData (Python 3.12)** em *Select Another Kernel → Jupyter Kernel*.
+
+**"Todos os modelos falharam (códigos [429, ...])"**
+
+O OpenRouter usa o código 429 tanto para "modelo lotado" quanto para "cota diária esgotada". Rode `verificar_cota()`: se restarem 0 requisições, a cota zera às 21h (horário de Brasília). Se ainda houver cota, os modelos estão lotados e vale tentar de novo em alguns minutos.
+
 ## Estrutura do projeto
 
 ```
@@ -114,6 +134,7 @@ O notebook está dividido em seções:
 | **Máximo de 50 linhas por consulta** | Uma consulta como `SELECT * FROM dim_movies` traria 95 mil linhas e estouraria o contexto do modelo. A ferramenta avisa quando corta ("mostrando 50 de 95.645 linhas") |
 | **Autocorreção** (`ModelRetry`, até 2 tentativas) | Se o SQL der erro, a mensagem do SQLite volta para o modelo corrigir, em vez de quebrar a pergunta |
 | **Teto de 5 requisições por pergunta** | Protege a cota: um modelo em loop gasta no máximo 5 requisições, não as 50 do dia |
+| **Camada semântica** (view `financas_filmes`) | A pergunta do desafio sobre margem cita os próprios filtros ("entre os que possuem receita e orçamento informados"), e o modelo seguia o filtro da pergunta, esquecendo o corte de US$ 10 mil da regra, em duas rodadas seguidas. Em vez de depender do modelo lembrar, os filtros e o cálculo de margem e retorno ficam numa view temporária, criada a cada conexão sem alterar o banco. Usando a view, o modelo não tem como errar o filtro |
 | **SQLs registrados pela própria ferramenta** | Mostra ao usuário os SQLs que realmente rodaram, não os que o modelo diz que rodou, e sem gastar requisição extra |
 | **2 exemplos de pergunta e SQL no prompt** (few-shot) | Ensinam os JOINs mais difíceis (gênero e papel da pessoa). Nenhum deles é pergunta do desafio, para não entregar a resposta ao modelo |
 | **Memória de conversa opcional** (`continuar=True`) | Com memória sempre ligada, as perguntas independentes virariam uma conversa só, com cada pergunta carregando as tabelas de resultado de todas as anteriores |
@@ -132,14 +153,14 @@ Antes de construir o agente, os dados foram explorados direto no banco (seções
 | Valores em **R$** por padrão (dólar só se pedido) | O público é brasileiro e as perguntas do desafio usam R$ |
 | **Lucro só com receita e orçamento informados** | A coluna de lucro nunca é nula e engana: sem receita ela vale menos o orçamento, sem orçamento ela vale a própria receita. Quando o usuário pede lucro "considerando filmes com receita informada", o agente mostra as duas versões lado a lado (só receita e receita + orçamento) num único SQL |
 | **Margem = lucro ÷ receita**; **retorno (ROI) = lucro ÷ orçamento** | Margem responde "de tudo que faturou, quanto virou lucro"; retorno responde "quanto voltou para cada real investido" |
-| **Orçamento mínimo de US$ 10 mil** em margem e retorno | Existem filmes com orçamento de US$ 50 ou US$ 128, claramente erros de cadastro, que dominariam qualquer ranking com margens de 100% e retornos de milhões de %. O corte remove os absurdos sem descartar produções de baixo orçamento reais |
+| **Orçamento mínimo de US$ 10 mil** em margem e retorno | Existem filmes com orçamento de US$ 50 ou US$ 128, claramente erros de cadastro, que dominariam qualquer ranking com margens de 100% e retornos de milhões de %. O corte remove os absurdos sem descartar produções de baixo orçamento reais. Implementado na view `financas_filmes` |
 | **Margem de um grupo = soma do lucro ÷ soma da receita** | A média das margens de cada filme explode com receitas minúsculas: um filme com receita de US$ 3 e orçamento de US$ 162 mil tem margem de -5.409.086%, o que deixava todos os gêneros com margem média negativa |
 | **Divisões com `* 1.0` antes de dividir** | O SQLite descarta as casas decimais quando os dois valores são inteiros. Como 323 filmes têm valores sem centavos, a margem deles virava 0 e eles sumiam do ranking. A regra mostra o jeito certo (`lucro * 1.0 / receita`) e o errado (`(lucro / receita) * 1.0`), porque só o jeito certo não bastou: o modelo colocou o `* 1.0` depois da divisão |
 | **Mínimo de 100 votos (TMDB e IMDb) e 4 avaliações de usuários** em rankings de notas de filmes | Sem isso, filmes com 1 voto dominam (ex.: nota 10 no TMDB com um único voto). Para TMDB/IMDb sobram mais de 4 mil filmes com as duas notas. Nas avaliações de usuários, 93% dos filmes têm só 1 avaliação, então o mínimo é menor. Não se aplica a médias de grupos (por ano, por diretor), em que um filme sozinho pesa pouco |
 | Nota TMDB = 0 significa "sem votos" | 36 mil filmes têm nota 0 e quase todos têm 0 votos |
 | O papel da pessoa (Ator, Diretor, Roteirista) está em `dim_people` | A tabela `bridge_movie_person` não diz o papel. A mesma pessoa pode aparecer com papéis diferentes (ex.: Tom Hanks como Ator e como Roteirista) |
 | Gêneros estão em inglês | "Terror" precisa virar `'Horror'` no SQL |
-| "Últimos N anos" a partir da data de hoje | O prompt informa a data atual. O catálogo vai de 2016 a 2029, mas quase tudo é até 2024 |
+| "Últimos N anos" = do ano atual menos N + 1 até o ano atual | Em 2026, "últimos 5 anos" = 2022 a 2026. O modelo alternava entre 2021 e 2022 como ano inicial, então a regra traz a conta e um exemplo. O catálogo vai de 2016 a 2029, mas quase tudo é até 2024 |
 | Contas e conversões de unidade no SQL | O modelo erra contas de cabeça (escreveu "R$ 0,5 mil" para R$ 451 mil) |
 | Títulos sem tradução | O modelo traduziu um título, e o título traduzido não existe no banco |
 
@@ -159,11 +180,11 @@ As 14 perguntas de exemplo do desafio foram respondidas pelo agente e comparadas
 |---|---|---|
 | Bilheteria e finanças | Top 10 filmes com maior receita em R$ | Avatar: The Way Of Water (R$ 12,39 bi), Avengers: Endgame, Spider-man: No Way Home... |
 | | Lucro médio por gênero (filmes com receita informada) | Science Fiction no topo, com as duas versões: R$ 520,8 mi (só receita) e R$ 755,7 mi (receita + orçamento) |
-| | Filmes com maior margem de lucro | Secret Superstar (99,8%), Demond The Movie (99,7%), Unbound (99,6%) |
+| | Filmes com maior margem de lucro | Secret Superstar (99,8%), Demond The Movie (99,7%), Unbound (99,6%), usando a view `financas_filmes` |
 | Popularidade e engajamento | 5 filmes mais populares | Blue Beetle, Gran Turismo, La Fellinette... |
 | | Maior divergência entre TMDB e IMDb | Me Against You: Mr. S's Vendetta (TMDB 8,1 × IMDb 1,7), com mínimo de 100 votos |
 | | Nota média IMDb por ano | De 6,34 (2016) a 6,15 (2024) |
-| Elenco e equipe | Ator com mais filmes nos últimos 5 anos | Eric Roberts, 88 filmes |
+| Elenco e equipe | Ator com mais filmes nos últimos 5 anos | Eric Roberts, 60 filmes (2022 a 2026) |
 | | Diretores com maior nota média (mín. 5 filmes) | Scott Wozniak (9,34), Yūichirō Hayashi e Jun Shishido (9,19) |
 | | Dupla ator–diretor que mais trabalhou junta | Joe Anoa'i e Kevin Dunn, 37 filmes |
 | Gêneros e produtoras | Quantidade de filmes por gênero | Drama (28.086), Documentary (18.082), Comedy (16.048)... |
@@ -192,6 +213,9 @@ Várias regras do prompt surgiram de respostas erradas nos testes:
 - Converteu valores de cabeça e errou a unidade → "faça as contas no SQL"
 - Aplicou o mínimo de votos em médias por ano e por diretor → "não aplique em médias de grupos"
 - Fez divisão inteira e zerou a margem de 323 filmes → regra com exemplo do jeito certo e do errado
+- Esqueceu o corte de US$ 10 mil na margem quando a pergunta citava outros filtros, em duas rodadas seguidas → camada semântica (view com os filtros e o cálculo já aplicados)
+- Alternou entre 2021 e 2022 como início dos "últimos 5 anos" → regra com a conta e um exemplo
+- Com a coluna `margem` pronta na view, calculou a margem por gênero com `AVG(margem)` (a média das margens que a regra proíbe) → regra com exemplo do jeito certo e do errado
 
 ## Gitflow
 
@@ -214,6 +238,9 @@ Todo código entrou por **Pull Request**:
 | #5 | `feat/fallback-modelos` | Fallback entre modelos gratuitos |
 | #6 | `feat/memoria-conversa` | Memória de conversa opcional |
 | #7 | `feat/readme` | Este README |
+| #8 | `feat/rodada-final` | Execução completa do notebook |
+| #9 | `feat/camada-semantica` | View de margem e retorno, ajustes finais no prompt e no README |
+| #10 | `dev` → `main` | Entrega final |
 
 Os commits seguem o padrão [Conventional Commits](https://www.conventionalcommits.org/pt-br/), em português:
 
@@ -227,9 +254,16 @@ Os commits seguem o padrão [Conventional Commits](https://www.conventionalcommi
 
 ## Limitações conhecidas
 
-- **O modelo não é 100% previsível.** A mesma pergunta pode vir com a tabela em outra ordem ou com uma explicação diferente. Ocasionalmente ele erra a unidade de valores pequenos ("mil" em vez de "milhões") ou distorce um título na resposta, mesmo com o SQL e os dados corretos. Por isso os SQLs executados são sempre mostrados junto com a resposta
+- **O modelo não é 100% previsível.** A mesma pergunta pode vir com a tabela em outra ordem, com outra explicação ou, às vezes, ignorando uma regra do prompt (principalmente quando a própria pergunta cita outro critério). Também pode errar a unidade de valores pequenos ("mil" em vez de "milhões") ou distorcer um título na resposta, mesmo com o SQL e os dados corretos. Por isso os SQLs executados são sempre mostrados junto com a resposta, e a regra mais crítica (margem e retorno) foi para a camada semântica
 - **Modelos gratuitos podem ser lentos:** algumas perguntas levaram mais de 1 minuto
 - **Cota de 50 requisições por dia** na conta gratuita do OpenRouter. Requisições que falham também contam, inclusive as tentativas do fallback
-- **A avaliação das respostas foi manual**, comparando com SQLs escritos à mão. Uma evolução natural seria automatizar essa comparação
+- **A avaliação das respostas foi manual**, comparando com SQLs escritos à mão
 - **Os dados sujos** (títulos duplicados, popularidade suspeita, nomes inválidos) aparecem nas respostas, porque o agente responde sobre os dados como eles estão
-- **Windows 11 com Smart App Control:** pode bloquear pacotes recentes. Foi o motivo de usar o pandas 2.x
+- **Windows 11 com Smart App Control:** bloqueou o pandas 3 e o `python.exe` da `.venv` durante o desenvolvimento (ver *Solução de problemas*)
+
+## Próximos passos
+
+- **Automatizar a avaliação:** rodar as perguntas do desafio e comparar o resultado do agente com os SQLs de referência, medindo a taxa de acerto
+- **Ampliar a camada semântica:** levar para views outras regras que hoje dependem do prompt, como o mínimo de votos e o lucro com receita e orçamento informados
+- **Interface de chat:** uma tela simples (por exemplo, com Streamlit) para quem não usa notebook
+- **Agente híbrido:** busca semântica nas sinopses dos filmes, combinada com o SQL
