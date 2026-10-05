@@ -215,6 +215,7 @@ Várias regras do prompt surgiram de respostas erradas nos testes:
 - Fez divisão inteira e zerou a margem de 323 filmes → regra com exemplo do jeito certo e do errado
 - Esqueceu o corte de US$ 10 mil na margem quando a pergunta citava outros filtros, em duas rodadas seguidas → camada semântica (view com os filtros e o cálculo já aplicados)
 - Alternou entre 2021 e 2022 como início dos "últimos 5 anos" → regra com a conta e um exemplo
+- Com a coluna `margem` pronta na view, calculou a margem por gênero com `AVG(margem)` (a média das margens que a regra proíbe) → regra com exemplo do jeito certo e do errado
 
 ## Gitflow
 
